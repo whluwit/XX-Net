@@ -3,7 +3,6 @@
 
 import os
 import sys
-import config
 
 current_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -81,8 +80,7 @@ class MacTrayObject(NSObject):
         NSApp.terminate_(self)
 
     def config_(self, notification):
-        host_port = config.get(["modules", "launcher", "control_port"], 8085)
-        webbrowser.open_new("http://127.0.0.1:%s/" % host_port)
+        webbrowser.open_new("http://127.0.0.1:8085/")
 
     #Note: the function name for action can include '_'
     # limited by Mac cocoa

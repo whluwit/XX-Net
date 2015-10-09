@@ -123,6 +123,14 @@ def connect_ssl(ip, port=443, timeout=5, openssl_context=None):
     ssl_sock.sock = sock
     return ssl_sock, connct_time, handshake_time
 
+class HoneypotError(Exception):
+    def __init__(self, *args, **kwargs):
+        pass
+
+    @staticmethod
+    def __new__(S, *more):
+        pass
+
 class Check_result():
     def __init__(self):
         self.domain = ""
@@ -157,6 +165,9 @@ class Check_frame(object):
                     raise SSLError("no cert")
 
                 issuer_commonname = next((v for k, v in cert.get_issuer().get_components() if k == 'CN'), '')
+                if self.check_cert and not issuer_commonname.startswith('Google'):
+                    raise HoneypotError(' certficate is issued by %r, not Google' % ( issuer_commonname))
+
 
                 ssl_cert = cert_util.SSLCert(cert)
                 xlog.info("%s CN:%s", self.ip, ssl_cert.cn)
@@ -168,6 +179,9 @@ class Check_frame(object):
                 return callback(ssl_sock, self.ip)
 
             return True
+        except HoneypotError as e:
+            xlog.warn("honeypot %s", self.ip)
+            raise e
         except SSLError as e:
             xlog.debug("Check_appengine %s SSLError:%s", self.ip, e)
             pass
@@ -220,7 +234,7 @@ def test_server_type(ssl_sock, ip):
 
 def test_app_head(ssl_sock, ip):
     appid = appid_manager.get_appid()
-    request_data = 'GET / HTTP/1.1\r\nHost: %s.appspot.com\r\n\r\n' % appid
+    request_data = 'HEAD /_gh/ HTTP/1.1\r\nHost: %s.appspot.com\r\n\r\n' % appid
     time_start = time.time()
     ssl_sock.send(request_data.encode())
     response = httplib.HTTPResponse(ssl_sock, buffering=True)
@@ -230,10 +244,7 @@ def test_app_head(ssl_sock, ip):
         if status != 200:
             xlog.debug("app check %s status:%d", ip, status)
             raise Exception("app check fail")
-        content = response.read()
-        if "GoAgent" not in content:
-            xlog.debug("app check %s content:%s", ip, content)
-            raise Exception("content fail")
+
     except Exception as e:
         xlog.exception("test_app_head except:%r", e)
         return False
@@ -582,7 +593,7 @@ if __name__ == "__main__":
     #test_gws("216.58.196.176") #gvs
     #result = test_gws("139.175.107.212")
     #print result
-    test('1.255.22.210', 1)
+    test('216.239.38.125', 1)
     #test("216.239.38.123")
     #     test_multi_thread_search_ip()
     #check_all_exist_ip()

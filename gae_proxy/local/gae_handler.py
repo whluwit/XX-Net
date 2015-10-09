@@ -241,9 +241,6 @@ def fetch(method, url, headers, body):
         response.fp = io.BytesIO(b'connection aborted. too short headers data=' + data)
         response.read = response.fp.read
         return response
-
-    response.ssl_sock.received_size += headers_length
-
     raw_response_line, headers_data = inflate(data).split('\r\n', 1)
     _, response.status, response.reason = raw_response_line.split(None, 2)
     response.status = int(response.status)
@@ -309,7 +306,7 @@ def handler(method, url, headers, body, wfile):
                 xlog.warn("fetch gae status:%s url:%s", response.app_status, url)
 
                 server_type = response.getheader('Server', "")
-                if "gws" not in server_type and "Google Frontend" not in server_type:
+                if "gws" not in server_type:
                     xlog.warn("IP:%s not support GAE, server type:%s", response.ssl_sock.ip, server_type)
                     google_ip.report_connect_fail(response.ssl_sock.ip, force_remove=True)
                     response.close()
@@ -407,15 +404,12 @@ def handler(method, url, headers, body, wfile):
             start, end, length = tuple(int(x) for x in re.search(r'bytes (\d+)-(\d+)/(\d+)', content_range).group(1, 2, 3))
         else:
             start, end, length = 0, content_length-1, content_length
-        body_length = end - start + 1
 
         last_read_time = time.time()
         while True:
             if start > end:
-                response.ssl_sock.received_size += body_length
-                google_ip.report_ip_traffic(response.ssl_sock.ip, body_length)
-                https_manager.save_ssl_connection_for_reuse(response.ssl_sock, call_time=time_request)
-                xlog.info("GAE %d|%s|%d t:%d s:%d %d %s", response.ssl_sock.fd, response.ssl_sock.ip, response.ssl_sock.received_size, (time.time()-time_request)*1000, length, response.status, url)
+                https_manager.save_ssl_connection_for_reuse(response.ssl_sock)
+                xlog.info("GAE t:%d s:%d %d %s", (time.time()-time_request)*1000, length, response.status, url)
                 return
 
             data = response.read(config.AUTORANGE_BUFSIZE)
