@@ -97,6 +97,10 @@ class Connect_pool():
         fastest_time = 9999
         fastest_sock = None
         for sock in self.pool:
+            ip = sock.ip
+            #if not google_ip.is_traffic_quota_allow(ip):
+            #    continue
+
             time = self.pool[sock]
             if time < fastest_time or not fastest_sock:
                 fastest_time = time
@@ -165,6 +169,12 @@ class Https_connection_manager(object):
         # http://src.chromium.org/svn/trunk/src/net/third_party/nss/ssl/sslenum.c
         # openssl s_server -accept 443 -key CA.crt -cert CA.crt
 
+        # ref: http://vincent.bernat.im/en/blog/2011-ssl-session-reuse-rfc5077.html
+        self.openssl_context = SSLConnection.context_builder(ca_certs=g_cacertfile)
+        self.openssl_context.set_session_id(binascii.b2a_hex(os.urandom(10)))
+        if hasattr(OpenSSL.SSL, 'SESS_CACHE_BOTH'):
+            self.openssl_context.set_session_cache_mode(OpenSSL.SSL.SESS_CACHE_BOTH)
+
         self.timeout = 4
         self.max_timeout = 15
         self.thread_num = 0
@@ -181,21 +191,15 @@ class Https_connection_manager(object):
         p.start()
 
     def load_config(self):
-        self.max_thread_num = config.CONFIG.getint("connect_manager", "https_max_connect_thread") #10
-        self.connection_pool_max_num = config.CONFIG.getint("connect_manager", "https_connection_pool_max") #20/30
-        self.connection_pool_min_num = config.CONFIG.getint("connect_manager", "https_connection_pool_min") #20/30
-        self.keep_alive = config.CONFIG.getint("connect_manager", "https_keep_alive") #1
+        self.max_thread_num = config.CONFIG.getint("connect_manager", "https_max_connect_thread")
+        self.connection_pool_max_num = config.CONFIG.getint("connect_manager", "https_connection_pool_max")
+        self.connection_pool_min_num = config.CONFIG.getint("connect_manager", "https_connection_pool_min")
+        self.keep_alive = config.CONFIG.getint("connect_manager", "https_keep_alive")
 
         self.new_conn_pool = Connect_pool()
         self.gae_conn_pool = Connect_pool()
         self.host_conn_pool = {}
 
-        self.openssl_context = SSLConnection.context_builder(ca_certs=g_cacertfile)
-
-        # ref: http://vincent.bernat.im/en/blog/2011-ssl-session-reuse-rfc5077.html
-        self.openssl_context.set_session_id(binascii.b2a_hex(os.urandom(10)))
-        if hasattr(OpenSSL.SSL, 'SESS_CACHE_BOTH'):
-            self.openssl_context.set_session_cache_mode(OpenSSL.SSL.SESS_CACHE_BOTH)
 
     def head_request(self, ssl_sock):
         if ssl_sock.host == '':
@@ -278,8 +282,12 @@ class Https_connection_manager(object):
 
             time.sleep(1)
 
-    def save_ssl_connection_for_reuse(self, ssl_sock, host=None):
-        ssl_sock.last_use_time = time.time()
+    def save_ssl_connection_for_reuse(self, ssl_sock, host=None, call_time=0):
+        if call_time:
+            ssl_sock.last_use_time = call_time
+        else:
+            ssl_sock.last_use_time = time.time()
+
         if host:
             if host not in self.host_conn_pool:
                 self.host_conn_pool[host] = Connect_pool()
@@ -406,7 +414,10 @@ class Https_connection_manager(object):
             # sometimes, we want to use raw tcp socket directly(select/epoll), so setattr it to ssl socket.
             ssl_sock.ip = ip
             ssl_sock.sock = sock
+            ssl_sock.fd = sock.fileno()
             ssl_sock.create_time = time_begin
+            ssl_sock.received_size = 0
+            ssl_sock.load = 0
             ssl_sock.handshake_time = handshake_time
             ssl_sock.host = ''
 
@@ -419,8 +430,8 @@ class Https_connection_manager(object):
 
                 issuer_commonname = next((v for k, v in cert.get_issuer().get_components() if k == 'CN'), '')
                 if not issuer_commonname.startswith('Google'):
-                    google_ip.report_bad_ip(ssl_sock.ip)
-                    connect_control.fall_into_honeypot()
+                    #google_ip.report_bad_ip(ssl_sock.ip)
+                    #connect_control.fall_into_honeypot()
                     raise socket.error(' certficate is issued by %r, not Google' % ( issuer_commonname))
 
             verify_SSL_certificate_issuer(ssl_sock)
@@ -519,9 +530,6 @@ class Https_connection_manager(object):
             else:
                 xlog.debug("create ssl timeout fail.")
                 return None
-
-
-
 
 
 class Forward_connection_manager():
@@ -668,48 +676,5 @@ class Forward_connection_manager():
                 remote.close()
 
 
-
-
 https_manager = Https_connection_manager()
 forwork_manager = Forward_connection_manager()
-
-
-def test_pool():
-    pool = Connect_pool()
-    pool.put((3, "c"))
-    pool.put((1, "a"))
-    pool.put((2, "b"))
-
-    t, s = pool.get()
-    print s
-
-    t, s = pool.get()
-    print s
-
-    t, s = pool.get()
-    print s
-
-
-def test_pool_speed():
-    pool = Connect_pool()
-    for i in range(100):
-        pool.put((i, "%d"%i))
-
-    start = time.time()
-    t, s = pool.get()
-    print time.time() - start
-    print s
-    # sort time is 5ms for 10000
-    # sort time is 0ms for 100
-
-if __name__ == "__main__":
-    #test_pool_speed()
-    #sock = forwork_manager.create_connection()
-    #print sock
-    appid = "xxnet-a23"
-    le = appid[7:]
-    print le
-    if appid.startswith("xxnet-") and le.isdigit():
-        print "is dig"
-    else:
-        print "not dig"
